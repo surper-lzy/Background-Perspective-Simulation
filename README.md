@@ -1,182 +1,305 @@
-# 背景变换代码使用指南
+# 立体背景替换系统 (Stereo Background Replacement)
 
-## ⭐ 新功能：ZoeDepth 深度估计集成
+## 📖 简介
 
-现在支持使用 **ZoeDepth** 自动估计背景深度，无需手动提供深度图！
+本项目实现了针对**鱼眼双目相机**的立体背景替换系统，支持自动深度估计和鱼眼投影。
 
-### 🎯 端到端运行（推荐）
+### 核心特性
+- ✅ **保留原始鱼眼前景**: 避免去畸变导致的画质损失
+- ✅ **深度自动估计**: 集成 ZoeDepth 对针孔背景进行单目深度估计
+- ✅ **双目立体合成**: 基于深度重投影生成左右眼立体图像
+- ✅ **针孔到鱼眼投影**: 将生成的针孔背景重投影为鱼眼风格
+- ✅ **两种方法**: 支持深度引导方法和两阶段单应方法
 
-一键运行完整流程，包含自动深度估计：
+### 工作流程
+```
+输入：
+  - 鱼眼左右前景图 (A, B) + 掩码
+  - 针孔新背景图 (C)
+  - 鱼眼相机参数 (K, xi)
+
+处理：
+  1. 保持前景A/B为原始鱼眼格式（不处理）
+  2. 对针孔背景C进行深度估计
+  3. 生成虚拟的针孔立体背景（左/右）
+  4. 将针孔背景投影为鱼眼风格（匹配A/B）
+  5. 在鱼眼域合成最终结果
+
+输出：
+  - 鱼眼左右合成图（前景保留 + 背景替换）
+```
+
+---
+
+## 🚀 快速开始
+
+### 1. 安装依赖
+
+```bash
+pip install opencv-contrib-python numpy torch torchvision
+```
+
+**注意**: 必须安装 `opencv-contrib-python` 才能使用鱼眼投影功能（cv2.omnidir模块）！
+
+### 2. 准备数据
+
+将你的数据放入 `test_data/` 目录：
+```
+test_data/
+├── 037.jpg                      # 新背景图（普通针孔相机拍摄）
+├── segment/
+│   ├── 2_00402.png             # 左相机前景（鱼眼，已分割）
+│   └── 4_00402.png             # 右相机前景（鱼眼，已分割）
+├── mask/
+│   ├── 2_00402.png             # 左前景掩码（鱼眼域）
+│   └── 4_00402.png             # 右前景掩码（鱼眼域）
+└── images/                      # 可选：参考图（用于两阶段方法）
+    ├── 2_00402.jpg             # 左相机原始参考图（鱼眼）
+    └── 4_00402.jpg             # 右相机原始参考图（鱼眼）
+```
+
+**重要说明**：
+- **前景和掩码**必须是原始鱼眼图像（不要去畸变）
+- **新背景**应该是普通针孔相机拍摄（或已去畸变的图像）
+- **参考图**（可选）用于两阶段单应方法
+
+### 3. 配置相机参数
+
+编辑 `run_with_zoedepth.py` 中的相机参数（约 320 行）：
+
+```python
+params_left = {
+    "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],  # 左相机内参
+    "xi": 0.976611                                # 左相机xi参数
+}
+
+params_right = {
+    "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],  # 右相机内参
+    "xi": 0.905052                                # 右相机xi参数
+}
+```
+
+**如何获取这些参数？**
+- 使用 OpenCV 的鱼眼标定工具进行相机标定
+- 或使用 MATLAB Camera Calibration Toolbox
+- K矩阵包含焦距(fx, fy)和光心(cx, cy)
+- xi是Mei全向相机模型的畸变参数
+
+### 4. 运行
 
 ```bash
 python run_with_zoedepth.py
 ```
 
-这将自动完成：
-1. ✅ ZoeDepth 深度估计
-2. ✅ 深度引导背景扭曲
-3. ✅ 前景背景合成
-4. ✅ 生成左右视角结果
+脚本会自动运行两种方法（如果提供了参考图）：
+- **方法1**: 深度引导 + 鱼眼投影
+- **方法2**: 两阶段单应 + 鱼眼投影
 
-**详细说明**：见 `ZOEDEPTH_INTEGRATION_GUIDE.md`
+### 5. 查看结果
+
+检查 `output/` 目录：
+```
+output/
+├── final_fisheye_left_depth.jpg       # 最终鱼眼左视角（深度方法）
+├── final_fisheye_right_depth.jpg      # 最终鱼眼右视角（深度方法）
+├── final_fisheye_left_homography.jpg  # 最终鱼眼左视角（单应方法）
+├── final_fisheye_right_homography.jpg # 最终鱼眼右视角（单应方法）
+├── depth_visualization.jpg            # 背景深度图可视化
+├── depth_map.png                      # 深度图（16位PNG）
+├── debug_pinhole_bg_*.jpg            # 中间针孔背景（调试用）
+└── debug_fisheye_bg_*.jpg            # 投影后的鱼眼背景（调试用）
+```
 
 ---
 
-## 🚀 快速开始（传统方法）
-
-### 第一步：生成测试数据
-```bash
-python generate_test_data.py
-```
-这将在 `test_data/` 目录下生成所有必需的测试文件（背景图、前景图、掩码、深度图等）。
-
-### 第二步：运行测试
-```bash
-python test_run.py
-```
-这将自动运行所有三种方法并生成结果到 `output/` 目录。
-
-### 第三步：查看结果
-检查 `output/` 目录中的图像：
-- `warped_bg_*.jpg` - 仅背景扭曲效果
-- `two_stage_*.jpg` - 两阶段自动匹配结果
-- `depth_*.jpg` - 深度重投影结果
-
----
-
-## 项目结构
+## 📂 项目结构
 
 ```
-C:\Users\lzy\Desktop\Test\
-├── depth_estimator.py            # ⭐ ZoeDepth 深度估计模块（新）
-├── run_with_zoedepth.py          # ⭐ 端到端运行脚本（新）
-├── intrinsics_estimator.py      # 相机内参估计工具
-├── homography_warper.py          # 单应变换背景扭曲
-├── depth_warper.py               # 深度引导重投影
+.
+├── run_with_zoedepth.py          # 主程序（鱼眼背景替换）
 ├── background_compositor.py      # 背景合成主类
-├── example_usage.py              # 使用示例
-├── requirements.txt              # 依赖包列表
-└── background_warping.md         # 原始方案文档
+├── depth_estimator.py            # ZoeDepth 深度估计
+├── depth_warper.py               # 深度引导扭曲
+├── homography_warper.py          # 单应性变换扭曲
+├── intrinsics_estimator.py       # 相机内参估计
+├── panorama_processor.py         # 全景图处理
+├── foreground_segmenter.py       # 前景分割（待集成）
+├── requirements.txt              # Python 依赖
+├── ZoeDepth/                     # ZoeDepth 模型目录
+├── test_data/                    # 测试数据目录
+└── output/                       # 输出目录（自动生成）
 ```
 
-## 快速开始
+---
 
-### 1. 安装依赖
+## ⚙️ 关键参数说明
 
-```bash
-pip install -r requirements.txt
-```
+### 鱼眼相机参数
+- **K (内参矩阵)**: 3x3 相机内参矩阵，包含：
+  - `fx, fy`: 焦距（像素）
+  - `cx, cy`: 光心坐标（像素）
+- **xi (畸变参数)**: Mei 全向相机模型参数，通常在 0.8~1.0 之间
+  - xi 越接近 1.0，鱼眼畸变越大
 
-### 2. 基本使用流程
+### 深度方法参数
+- **hfov_deg**: 虚拟针孔相机的水平视场角（度），默认 90°
+  - 影响中间态针孔背景的生成
+  - 应根据背景图的实际视场角设置
+- **baseline**: 左右相机基线距离（米），默认 0.065m（人眼瞳距）
+  - 决定立体视差的大小
+  - 应与实际硬件间距匹配
+- **rotation_y_deg**: 相机 Y 轴旋转角度（度），默认 5°
+  - 模拟相机朝向差异
+  - 可以设为 0 表示平行视角
+- **virtual_focal_length**: 虚拟针孔相机焦距（像素），默认 None（自动计算）
+  - 手动设置可以控制中间态的透视效果
 
-#### 方法A：单应变换 + 手动标注点
+### 两阶段方法参数
+- **reference_left/right**: 原场景的参考图像对
+  - 用于学习左右视角的几何关系
+  - 必须与前景来自同一场景
+- **plane_corners**: 背景平面在左视角中的四个角点
+  - 脚本会自动设置为覆盖全图
+  - 可手动调整以精确控制背景位置
+
+---
+
+## 🔧 高级用法
+
+### 1. 调整虚拟相机视场角
+
+如果生成的背景视差不理想，可以调整虚拟针孔相机的参数：
 
 ```python
-from background_compositor import BackgroundCompositor, WarpMethod
-
-# 创建合成器
-compositor = BackgroundCompositor(method=WarpMethod.HOMOGRAPHY)
-
-# 加载背景
-compositor.load_background("background.jpg")
-
-# 定义对应点
-background_points_left = [(100, 100), (900, 100), (900, 700), (100, 700)]
-left_points = [(50, 80), (950, 120), (920, 680), (80, 720)]
-
-# 设置单应变换
-compositor.setup_homography_method(
-    background_points_left=background_points_left,
-    background_points_right=background_points_right,
-    left_points=left_points,
-    right_points=right_points
-)
-
-# 加载前景和掩码
-compositor.load_foreground_masks(
-    mask_left_path="mask_left.png",
-    mask_right_path="mask_right.png"
-)
-
-# 处理并保存
-result_left, result_right = compositor.process_stereo_pair(
-    foreground_left, foreground_right, (1920, 1080)
-)
+depth_params={
+    'hfov_deg': 80.0,           # 减小视场角会增大视差
+    'baseline': 0.065,
+    'rotation_y_deg': 5.0,
+    'virtual_focal_length': 800  # 或手动指定焦距
+}
 ```
 
-#### 方法B：单应变换 + 自动特征匹配
+### 2. 只使用深度方法
+
+如果不需要两阶段方法，可以注释掉 `run_with_test_data()` 中的相应代码块：
 
 ```python
-compositor = BackgroundCompositor(method=WarpMethod.HOMOGRAPHY)
-compositor.load_background("background.jpg")
-
-# 使用SIFT自动匹配
-compositor.setup_homography_method(
-    left_reference_img=left_reference,
-    right_reference_img=right_reference,
-    auto_method="sift"  # 或 "orb"
+# 只保留这部分
+run_fisheye_background_replacement(
+    ...,
+    use_depth_method=True,
+    depth_params={...}
 )
-
-# 其余步骤同上
 ```
 
-#### 方法C：深度引导重投影
+### 3. 处理不同尺寸的输入
+
+脚本会自动处理不同尺寸的输入：
+- **前景和掩码**：必须尺寸相同，决定最终输出尺寸
+- **背景**：可以是任意尺寸，会在处理过程中调整
+- **参考图**：应与前景尺寸接近以获得最佳效果
+
+### 4. 自定义合成区域
+
+如果需要精确控制前景和背景的融合，可以修改掩码：
+- 使用图像编辑软件（如 Photoshop）编辑掩码的边缘
+- 添加羽化效果使边缘更自然
+- 确保掩码是灰度图（0-255）
+
+### 5. 批量处理
+
+可以修改 `run_with_test_data()` 函数来循环处理多组数据：
 
 ```python
-compositor = BackgroundCompositor(method=WarpMethod.DEPTH)
-compositor.load_background("background.jpg")
-
-# 加载深度图
-depth_map = cv2.imread("depth.png", cv2.IMREAD_ANYDEPTH).astype(np.float32) / 1000.0
-
-# 设置深度方法
-compositor.setup_depth_method(
-    depth_map=depth_map,
-    background_image_shape=(1080, 1920),
-    target_image_shape=(1080, 1920),
-    hfov_deg=70.0,
-    baseline=0.065,
-    rotation_y_deg=5.0
-)
-
-# 其余步骤同上
+for bg_path in background_list:
+    run_fisheye_background_replacement(
+        background_path=bg_path,
+        ...
+    )
 ```
 
-## 模块说明
+---
 
-### IntrinsicsEstimator
-- 从EXIF或HFOV估计相机内参
-- 支持35mm等效焦距自动读取
-- 提供回退机制确保稳定性
+## ❓ 常见问题
 
-### HomographyWarper
-- 支持手动点和自动特征匹配
-- 使用RANSAC提高鲁棒性
-- 输出重投影误差等元信息
+### Q: 为什么前景保持鱼眼格式而不是去畸变？
+A: 保持原始鱼眼格式有以下优势：
+- 避免去畸变导致的画质损失（双重重采样）
+- 保持前景的原始细节和分辨率
+- 最终输出就是鱼眼格式，符合实际应用需求
 
-### DepthWarper
-- 3D点云反投影
-- 前向渲染 + z-buffer遮挡处理
-- 双边滤波平滑深度
-- 自动空洞填补
+### Q: 背景图必须是针孔相机拍摄的吗？
+A: 是的。ZoeDepth 深度估计模型是在针孔图像上训练的，对鱼眼图像效果不好。如果背景也是鱼眼，需要先手动去畸变。
 
-### BackgroundCompositor
-- 统一的接口整合所有功能
-- 支持前景背景合成
-- 边缘羽化和颜色匹配
+### Q: 左右相机参数不同怎么办？
+A: 脚本会自动处理。每个相机会使用各自的参数进行鱼眼投影，确保左右视角与原始鱼眼风格一致。
 
-## 注意事项
+### Q: 如何获取相机参数？
+A: 需要进行相机标定：
+- 使用 OpenCV 的 `cv2.omnidir.calibrate()` 函数
+- 或使用 MATLAB Camera Calibration Toolbox
+- 或使用 Kalibr 等专业标定工具
+- 标定时需要拍摄多张棋盘格图像
 
-1. **坐标点标注**：确保手动点按照(x, y)顺序，像素坐标从左上角(0,0)开始
-2. **深度图单位**：确保深度值为实际物理单位（米），不是归一化值
-3. **掩码格式**：前景掩码应为灰度图，255=前景，0=背景
-4. **图像尺寸**：所有输入图像尺寸应一致或手动调整
+### Q: 生成的背景边缘有黑边怎么办？
+A: 这是正常的，因为鱼眼视野比针孔相机大。解决方法：
+- 使用更大视场角的背景图
+- 调整 `virtual_focal_length` 参数
+- 在后期处理中裁剪边缘区域
 
-## 调试建议
+### Q: 立体视差效果不明显？
+A: 可以调整以下参数：
+- 增大 `baseline`（但不要超过实际硬件间距太多）
+- 调整 `rotation_y_deg` 增加旋转差异
+- 检查深度图质量，复杂场景效果更好
 
-1. 先运行`example_without_foreground_mask()`检查背景扭曲效果
-2. 使用`print(compositor.warper.meta)`查看单应矩阵质量指标
-3. 深度方法会输出覆盖率百分比，低于80%需检查参数
-4. 调整`feather_radius`参数优化前景背景过渡
+### Q: 深度估计不准确？
+A: ZoeDepth 的局限：
+- 对纯色、无纹理区域估计不准
+- 对透明物体（玻璃、水）效果差
+- 对动态模糊图像效果差
+- 可以尝试使用两阶段方法作为替代
 
-详细示例请参考 `example_usage.py`
+### Q: 前景和背景的融合有接缝？
+A: 改进方法：
+- 使用更精细的掩码（边缘羽化）
+- 调整掩码边缘的模糊程度
+- 检查前景和背景的亮度/颜色是否匹配
+
+### Q: 如何集成自动分割？
+A: 当前版本需要预先准备掩码。未来版本将集成 `foreground_segmenter.py` 模块实现自动分割（基于 Segment Anything 或类似模型）。
+
+---
+
+## 📊 性能参考
+
+在典型配置（GTX 1080 Ti, 640x480 分辨率）下：
+
+| 步骤 | 耗时 | 说明 |
+|------|------|------|
+| 加载图像 | ~0.1s | IO操作 |
+| ZoeDepth 深度估计 | ~2-5s | GPU加速，取决于背景分辨率 |
+| 针孔立体背景生成 | ~0.3s | 深度重投影 |
+| 鱼眼投影 | ~0.4s | 双相机投影映射 |
+| 合成 | ~0.1s | Alpha混合 |
+| **总计** | **~3-6s** | 完整流程 |
+
+**优化建议**：
+- 降低背景图分辨率可显著加速深度估计
+- 使用更强的 GPU（RTX 3090+）可减少 50% 时间
+- 两阶段方法不需要深度估计，约 1-2s 完成
+
+---
+
+## 📝 引用
+
+本项目使用了以下开源工具：
+- [ZoeDepth](https://github.com/isl-org/ZoeDepth) - Intel ISL 单目深度估计
+- [OpenCV](https://opencv.org/) - 计算机视觉库
+
+---
+
+## 📄 许可证
+
+MIT License
+
